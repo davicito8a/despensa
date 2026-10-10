@@ -4,9 +4,10 @@ import {
 } from './logic.js';
 import { RECOMMENDATIONS } from './recommendations.js';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const DEFAULT_ROOMS = ['Cocina', 'Baño', 'Dormitorio', 'Lavandería', 'Bodega'];
 const CART_KEY = 'despensa.cart';
+const RECS_DRAFT_KEY = 'despensa.recsDraft';
 const NO_ROOM = '';
 
 const state = {
@@ -42,6 +43,33 @@ function saveCart() {
     localStorage.setItem(CART_KEY, JSON.stringify(state.cart));
   } catch {
     /* sin almacenamiento local: el carro solo dura la sesión */
+  }
+}
+
+// Borrador de la configuración de productos habituales. Se escribe en cada cambio
+// (localStorage es síncrono, así que sobrevive aunque el sistema cierre la app).
+function loadRecsDraft() {
+  try {
+    const draft = JSON.parse(localStorage.getItem(RECS_DRAFT_KEY));
+    return Array.isArray(draft?.items) && draft.items.length ? draft : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveRecsDraft(items) {
+  try {
+    localStorage.setItem(RECS_DRAFT_KEY, JSON.stringify({ items, savedAt: Date.now() }));
+  } catch {
+    /* sin almacenamiento local: el borrador no se puede guardar */
+  }
+}
+
+function clearRecsDraft() {
+  try {
+    localStorage.removeItem(RECS_DRAFT_KEY);
+  } catch {
+    /* nada que borrar */
   }
 }
 
@@ -196,7 +224,7 @@ function toast(message, undo) {
 }
 
 let sheetEls = null;
-function openSheet(html, { wide = false } = {}) {
+function openSheet(html, { wide = false, onClose = null } = {}) {
   closeSheet();
   const backdrop = document.createElement('div');
   backdrop.className = 'backdrop';
@@ -209,16 +237,18 @@ function openSheet(html, { wide = false } = {}) {
   $('.sheet-close', sheet).addEventListener('click', closeSheet);
   document.body.append(backdrop, sheet);
   document.body.classList.add('sheet-open');
-  sheetEls = { backdrop, sheet };
+  sheetEls = { backdrop, sheet, onClose };
   return sheet;
 }
 
 function closeSheet() {
   if (!sheetEls) return;
-  sheetEls.backdrop.remove();
-  sheetEls.sheet.remove();
+  const { backdrop, sheet, onClose } = sheetEls;
+  backdrop.remove();
+  sheet.remove();
   sheetEls = null;
   document.body.classList.remove('sheet-open');
+  onClose?.();
 }
 
 function thumb(p) {
@@ -250,7 +280,7 @@ function stepperHTML(name, value, { min = 0, label = '' } = {}) {
   return `
     <div class="stepper" data-stepper="${name}">
       <button type="button" class="step" data-step="-1" aria-label="Restar">${ICONS.minus}</button>
-      <input type="number" inputmode="numeric" pattern="[0-9]*" min="${min}" step="1" name="${name}" value="${value}" aria-label="${esc(label)}">
+      <input type="number" inputmode="numeric" pattern="[0-9]*" min="${min}" step="1" name="${name}" value="${esc(value)}" aria-label="${esc(label)}">
       <button type="button" class="step" data-step="1" aria-label="Sumar">${ICONS.plus}</button>
     </div>`;
 }
@@ -281,6 +311,7 @@ function inicioHTML() {
   const pending = shoppingItems().length;
   return `
     <header class="topbar"><h1>Inicio</h1></header>
+    ${draftBannerHTML()}
     <div class="segmented" role="tablist" aria-label="Acción">
       <button type="button" role="tab" data-action="mode" data-mode="descontar" aria-selected="${state.mode === 'descontar'}">Descontar</button>
       <button type="button" role="tab" data-action="mode" data-mode="reponer" aria-selected="${state.mode === 'reponer'}">Reponer</button>
@@ -480,6 +511,7 @@ function inventarioHTML() {
         <button type="button" class="primary small" data-action="add">${ICONS.plus}<span>Agregar</span></button>
       </div>
     </header>
+    ${draftBannerHTML()}
     <input class="search" type="search" placeholder="Buscar en el inventario…" value="${esc(state.query.inventario)}" data-search="inventario" autocomplete="off">
     <div class="chips" role="tablist" aria-label="Habitación">
       ${chips.map((c) => `<button type="button" class="chip" data-action="room-filter" data-room="${c.id}" aria-selected="${state.roomFilter === c.id}">${esc(c.name)}</button>`).join('')}
@@ -516,9 +548,15 @@ function openAddSheet() {
       <span class="option-title">${title} <span class="tag">Próximamente</span></span>
       <span class="option-text">${text}</span>
     </button>`;
+  const draft = loadRecsDraft();
   const sheet = openSheet(`
     <h2>Agregar productos</h2>
     <div class="options">
+      ${draft ? `
+      <button type="button" class="option highlight" data-action="resume-draft">
+        <span class="option-title">Continuar configuración pendiente</span>
+        <span class="option-text">${plural(draft.items.length, 'producto', 'productos')} sin terminar de los productos habituales.</span>
+      </button>` : ''}
       <button type="button" class="option" data-action="add-manual">
         <span class="option-title">Ingreso manual</span>
         <span class="option-text">Escribe los datos del producto.</span>
@@ -535,6 +573,7 @@ function openAddSheet() {
     const action = e.target.closest('[data-action]')?.dataset.action;
     if (action === 'add-manual') openProductSheet(null);
     if (action === 'add-recs') openRecommendations();
+    if (action === 'resume-draft') openSetupSheet(loadRecsDraft().items);
   });
 }
 
@@ -559,6 +598,7 @@ function wireRoomSelect(select) {
       other.innerHTML = roomOptions(keep);
     }
     previous = room.id;
+    select.dispatchEvent(new Event('change', { bubbles: true })); // avisa al borrador del nuevo valor
   });
 }
 
@@ -734,6 +774,8 @@ function openProductSheet(product) {
 
 function openRecommendations() {
   const existing = new Set(state.products.map((p) => normalize(p.name)));
+  const pending = new Set((loadRecsDraft()?.items ?? []).map((x) => normalize(x.name)));
+  const status = (r) => (existing.has(normalize(r.name)) ? 'ya está' : pending.has(normalize(r.name)) ? 'pendiente' : '');
   const rooms = [...new Set(RECOMMENDATIONS.map((r) => r.room))];
   const sheet = openSheet(`
     <h2>Productos habituales</h2>
@@ -743,9 +785,9 @@ function openRecommendations() {
         <h3 class="group">${esc(room)}</h3>
         <div class="check-grid">
           ${RECOMMENDATIONS.map((r, i) => (r.room !== room ? '' : `
-            <label class="check-item${existing.has(normalize(r.name)) ? ' disabled' : ''}">
-              <input type="checkbox" name="rec" value="${i}" ${existing.has(normalize(r.name)) ? 'disabled' : ''}>
-              <span>${esc(r.name)}${existing.has(normalize(r.name)) ? ' <small>(ya está)</small>' : ''}</span>
+            <label class="check-item${status(r) ? ' disabled' : ''}">
+              <input type="checkbox" name="rec" value="${i}" ${status(r) ? 'disabled' : ''}>
+              <span>${esc(r.name)}${status(r) ? ` <small>(${status(r)})</small>` : ''}</span>
             </label>`)).join('')}
         </div>`).join('')}
       <div class="sheet-footer"><button type="submit" class="primary block" disabled>Continuar</button></div>
@@ -764,53 +806,111 @@ function openRecommendations() {
   });
 }
 
+// Convierte las recomendaciones elegidas en ítems del borrador y los suma a lo pendiente.
 async function openRecommendationSetup(picked) {
-  // Asegura que existan las habitaciones sugeridas antes de mostrar los selectores.
   const roomIds = {};
   for (const name of new Set(picked.map((r) => r.room))) roomIds[name] = (await createRoom(name)).id;
+  const items = loadRecsDraft()?.items ?? [];
+  const pending = new Set(items.map((x) => normalize(x.name)));
+  for (const r of picked) {
+    if (pending.has(normalize(r.name))) continue;
+    items.push({
+      name: r.name, brand: '', size: r.size ?? '', roomId: roomIds[r.room], stock: r.max, max: r.max, reorder: r.reorder,
+    });
+  }
+  saveRecsDraft(items);
+  openSetupSheet(items);
+}
 
+function setupCardHTML(item) {
+  return `
+    <fieldset class="setup-card">
+      <div class="setup-card-head">
+        <label>Nombre *<input name="name" value="${esc(item.name)}" maxlength="60" autocomplete="off"></label>
+        <button type="button" class="link danger-text" data-remove-card>Quitar</button>
+      </div>
+      <div class="two">
+        <label>Marca<input name="brand" value="${esc(item.brand)}" maxlength="40" autocomplete="off"></label>
+        <label>Tamaño<input name="size" value="${esc(item.size)}" maxlength="30" autocomplete="off"></label>
+      </div>
+      <label>Habitación<select name="roomId" data-room-select>${roomOptions(item.roomId)}</select></label>
+      <div class="three">
+        <div class="field"><span>Stock actual</span>${stepperHTML('stock', item.stock, { label: 'Stock actual' })}</div>
+        <div class="field"><span>Máximo</span>${stepperHTML('max', item.max, { min: 1, label: 'Stock máximo' })}</div>
+        <div class="field"><span>Reposición</span>${stepperHTML('reorder', item.reorder, { label: 'Nivel de reposición' })}</div>
+      </div>
+      <p class="error" role="alert"></p>
+    </fieldset>`;
+}
+
+// Hoja de configuración: cada cambio se guarda en el borrador, así nada se pierde si la app se cierra.
+function openSetupSheet(items) {
+  const title = (n) => `Configura ${plural(n, 'producto', 'productos')}`;
+  const button = (n) => `Agregar ${plural(n, 'producto', 'productos')}`;
   const sheet = openSheet(`
-    <h2>Configura ${plural(picked.length, 'producto', 'productos')}</h2>
-    <p class="muted">Ajusta el stock actual a lo que tienes hoy. Marca y tamaño son opcionales.</p>
+    <h2 id="setupTitle">${title(items.length)}</h2>
+    <p class="muted">Ajusta el stock actual a lo que tienes hoy. Marca y tamaño son opcionales.
+      Tu avance se guarda solo: si la app se cierra, puedes continuar después.</p>
     <form id="setupForm" novalidate>
-      ${picked.map((r, i) => `
-        <fieldset class="setup-card" data-index="${i}">
-          <label>Nombre *<input name="name" value="${esc(r.name)}" maxlength="60" autocomplete="off"></label>
-          <div class="two">
-            <label>Marca<input name="brand" maxlength="40" autocomplete="off"></label>
-            <label>Tamaño<input name="size" value="${esc(r.size ?? '')}" maxlength="30" autocomplete="off"></label>
-          </div>
-          <label>Habitación<select name="roomId" data-room-select>${roomOptions(roomIds[r.room])}</select></label>
-          <div class="three">
-            <div class="field"><span>Stock actual</span>${stepperHTML('stock', r.max, { label: 'Stock actual' })}</div>
-            <div class="field"><span>Máximo</span>${stepperHTML('max', r.max, { min: 1, label: 'Stock máximo' })}</div>
-            <div class="field"><span>Reposición</span>${stepperHTML('reorder', r.reorder, { label: 'Nivel de reposición' })}</div>
-          </div>
-          <p class="error" role="alert"></p>
-        </fieldset>`).join('')}
-      <div class="sheet-footer"><button type="submit" class="primary block">Agregar ${plural(picked.length, 'producto', 'productos')}</button></div>
-    </form>`, { wide: true });
+      <div id="setupCards">${items.map(setupCardHTML).join('')}</div>
+      <div class="sheet-footer"><button type="submit" class="primary block">${button(items.length)}</button></div>
+    </form>`, {
+    wide: true,
+    onClose: () => {
+      const draft = loadRecsDraft();
+      if (draft) {
+        render();
+        toast(`Avance guardado: ${plural(draft.items.length, 'producto pendiente', 'productos pendientes')}.`);
+      }
+    },
+  });
   const form = $('#setupForm', sheet);
-  wireSteppers(form);
+  const cards = () => $$('.setup-card', form);
+  const readCard = (card) => {
+    const get = (name) => $(`[name=${name}]`, card).value;
+    return {
+      name: get('name').trim(),
+      brand: get('brand').trim(),
+      size: get('size').trim(),
+      roomId: get('roomId') === '__new' ? NO_ROOM : get('roomId'),
+      stock: get('stock'),
+      max: get('max'),
+      reorder: get('reorder'),
+    };
+  };
+  const persist = () => {
+    const n = cards().length;
+    $('#setupTitle', sheet).textContent = title(n);
+    $('button[type=submit]', form).textContent = button(n);
+    saveRecsDraft(cards().map(readCard));
+  };
+
+  wireSteppers(form, persist);
+  form.addEventListener('input', persist);
+  form.addEventListener('change', persist);
   $$('select[data-room-select]', form).forEach(wireRoomSelect);
+  form.addEventListener('click', (e) => {
+    const remove = e.target.closest('[data-remove-card]');
+    if (!remove) return;
+    remove.closest('.setup-card').remove();
+    if (cards().length) {
+      persist();
+    } else {
+      clearRecsDraft();
+      closeSheet();
+      render();
+    }
+  });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const now = Date.now();
     const products = [];
     let firstError = null;
-    for (const card of $$('.setup-card', form)) {
-      const get = (name) => $(`[name=${name}]`, card).value;
+    for (const card of cards()) {
+      const raw = readCard(card);
       const data = {
-        name: get('name').trim(),
-        brand: get('brand').trim(),
-        size: get('size').trim(),
-        roomId: get('roomId') === '__new' ? NO_ROOM : get('roomId'),
-        barcode: '',
-        photo: null,
-        stock: toInt(get('stock')),
-        max: toInt(get('max')),
-        reorder: toInt(get('reorder')),
+        ...raw, barcode: '', photo: null, stock: toInt(raw.stock), max: toInt(raw.max), reorder: toInt(raw.reorder),
       };
       const error = !data.name ? 'El nombre es obligatorio.' : validateLevels(data);
       $('.error', card).textContent = error ?? '';
@@ -823,11 +923,25 @@ async function openRecommendationSetup(picked) {
       { store: 'movements', put: movement(p, 'alta', 0, p.stock) },
     ]));
     products.forEach(replaceProduct);
+    clearRecsDraft();
     closeSheet();
     state.view = 'inventario';
     render();
     toast(`${plural(products.length, 'producto agregado', 'productos agregados')} al inventario.`);
   });
+}
+
+function draftBannerHTML() {
+  const draft = loadRecsDraft();
+  if (!draft) return '';
+  return `
+    <div class="banner draft">
+      <span>Tienes ${plural(draft.items.length, 'producto', 'productos')} sin terminar de configurar.</span>
+      <span class="banner-actions">
+        <button type="button" class="link" data-action="discard-draft">Descartar</button>
+        <button type="button" class="primary small" data-action="resume-draft">Continuar</button>
+      </span>
+    </div>`;
 }
 
 // ---------- Ajustes, historial y respaldo ----------
@@ -1033,6 +1147,12 @@ function bindEvents() {
       case 'qty': openQtySheet(productById(id)); break;
       case 'edit': openProductSheet(productById(id)); break;
       case 'add': openAddSheet(); break;
+      case 'resume-draft': openSetupSheet(loadRecsDraft()?.items ?? []); break;
+      case 'discard-draft':
+        if (!confirm('¿Descartar los productos que no terminaste de configurar?')) return;
+        clearRecsDraft();
+        render();
+        break;
       case 'settings': openSettings(); break;
       case 'room-filter':
         state.roomFilter = btn.dataset.room;

@@ -204,6 +204,18 @@ input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -
   text-align: left;
 }
 
+.banner.draft {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  background: var(--primary-soft);
+  color: var(--text);
+  font-weight: 500;
+}
+.banner-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
 .chips {
   display: flex;
   gap: 8px;
@@ -527,6 +539,10 @@ form label input, form label select { margin-top: 4px; color: var(--text); font-
 .check-item small { color: var(--muted); }
 
 .setup-card { padding-top: 14px; }
+.setup-card-head { display: flex; align-items: flex-end; gap: 8px; }
+.setup-card-head label { flex: 1; }
+.setup-card-head .link { margin-bottom: 14px; }
+.option.highlight { border-color: var(--primary); background: var(--primary-soft); }
 
 .settings-section { margin-bottom: 20px; }
 .settings-section h3, .history h3 { margin: 0 0 8px; font-size: 16px; }
