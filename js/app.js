@@ -8,7 +8,7 @@ import { createScanner, cameraErrorMessage } from './scanner.js';
 import { lookupProduct } from './openfoodfacts.js';
 import { FIREBASE_CONFIG } from './firebase-config.js';
 
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.3.2';
 const DEFAULT_ROOMS = ['Cocina', 'Baño', 'Dormitorio', 'Lavandería', 'Bodega'];
 const CART_KEY = 'despensa.cart';
 const RECS_DRAFT_KEY = 'despensa.recsDraft';
@@ -268,9 +268,9 @@ function closeSheet() {
   onClose?.();
 }
 
+// Solo se muestra la foto real; sin foto, el nombre ocupa ese espacio.
 function thumb(p) {
-  if (p.photo) return `<img class="thumb" src="${p.photo}" alt="">`;
-  return `<span class="thumb initial" aria-hidden="true">${esc(p.name.charAt(0).toUpperCase())}</span>`;
+  return p.photo ? `<img class="thumb" src="${p.photo}" alt="">` : '';
 }
 
 function subtitle(p, withRoom = true) {

@@ -313,14 +313,6 @@ input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -
   object-fit: cover;
   background: var(--surface-2);
 }
-.thumb.initial {
-  display: grid;
-  place-items: center;
-  color: var(--primary);
-  background: var(--primary-soft);
-  font-weight: 700;
-  font-size: 18px;
-}
 
 .stock {
   flex-shrink: 0;
