@@ -12,8 +12,16 @@ Los datos se guardan **solo en el teléfono** (IndexedDB). No hay servidor ni cu
   lo que echas al carro, ajustas la cantidad real y tocas *Registrar compra*. También admite artículos sueltos
   que no son parte del inventario, y se puede compartir como texto.
 - **Inventario**: productos por habitación, búsqueda, edición de ficha y cantidades, historial por producto.
-  Para agregar: ingreso manual o lista de productos habituales. El escaneo de código de barras, la foto y la boleta
-  aparecen como "Próximamente".
+  Para agregar: ingreso manual, lista de productos habituales o escaneo de código de barras. La foto del producto
+  y la boleta aparecen como "Próximamente".
+- **Código de barras**:
+  - *Agregar → Escanear código*: busca nombre, marca, tamaño y foto en [Open Food Facts](https://world.openfoodfacts.org)
+    (base de datos abierta; cubre bien alimentos, poco aseo y limpieza). Si no lo encuentra, se completa a mano.
+  - *Inicio → botón de escáner*: cada código escaneado descuenta o suma 1 unidad, según el modo elegido.
+    Un código desconocido se puede asignar a un producto existente; desde ese momento la app lo reconoce.
+  - Un producto puede tener varios códigos, separados por coma.
+  - Lectura con el lector nativo del navegador (Android) o con [ZXing](https://github.com/zxing-js/library)
+    (iPhone; licencia Apache 2.0, en `js/vendor/`). Funciona sin internet; solo la búsqueda en Open Food Facts lo necesita.
 - **Ajustes** (engranaje en Inventario): habitaciones, historial completo, exportar e importar respaldo.
 
 ## Publicarla gratis en GitHub Pages
@@ -61,4 +69,7 @@ Así los teléfonos descargan la versión nueva: aparece la segunda vez que abre
 | `js/logic.js` | Reglas: reposición, cantidad sugerida, validaciones |
 | `js/db.js` | Almacenamiento local (IndexedDB) |
 | `js/recommendations.js` | Lista de productos habituales |
+| `js/scanner.js` | Cámara y lectura de códigos de barras |
+| `js/openfoodfacts.js` | Búsqueda de productos en Open Food Facts |
+| `js/vendor/` | Librería ZXing y su licencia |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Instalación y modo sin conexión |

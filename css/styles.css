@@ -561,6 +561,82 @@ form label input, form label select { margin-top: 4px; color: var(--text); font-
 .mov-delta.pos { color: var(--primary); }
 .mov-meta { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
 
+/* ---------- Escáner ---------- */
+
+.search-row { display: flex; gap: 8px; align-items: center; margin: 4px 0 8px; }
+.search-row .search { flex: 1; min-width: 0; margin: 0; }
+.scan-btn {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 50px;
+  height: 46px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--primary);
+  color: var(--primary-text);
+}
+
+.scanner {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  margin-bottom: 10px;
+  border-radius: var(--radius);
+  background: #000;
+  overflow: hidden;
+}
+.scanner video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.scanner-frame {
+  position: absolute;
+  inset: 28% 10%;
+  border: 3px solid rgba(255, 255, 255, 0.9);
+  border-radius: 12px;
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.35);
+}
+.scanner.off { display: none; }
+.scanner-torch {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+}
+.scanner-torch[hidden] { display: none; }
+.scanner-torch[aria-pressed="true"] { background: #fff; color: #111; }
+.scan-status { margin: 0 2px 10px; color: var(--muted); font-size: 14px; }
+.scan-card {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.scan-card p { margin: 0; }
+.scan-card.ok {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+.scan-card.warn { border-color: var(--warn); background: var(--warn-soft); }
+.scan-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+
+.lookup { margin: -4px 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); color: var(--muted); font-size: 14px; }
+.lookup[hidden] { display: none; }
+.lookup.ok { background: var(--primary-soft); color: var(--text); }
+.lookup.warn { background: var(--warn-soft); color: var(--text); }
+.field-note { margin: -4px 0 0; font-weight: 400; }
+.empty-row { padding: 0 14px; color: var(--muted); }
+
+
 /* ---------- Toast ---------- */
 
 .toast {

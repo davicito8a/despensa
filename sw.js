@@ -1,7 +1,7 @@
 // Service worker: permite abrir la app sin conexión (por ejemplo, en el supermercado).
 // Estrategia: responde al instante desde la caché y actualiza en segundo plano.
 // Al publicar cambios, sube CACHE para forzar la descarga de todos los archivos.
-const CACHE = 'despensa-v2';
+const CACHE = 'despensa-v3';
 const ASSETS = [
   './',
   'index.html',
@@ -11,13 +11,18 @@ const ASSETS = [
   'js/db.js',
   'js/logic.js',
   'js/recommendations.js',
+  'js/scanner.js',
+  'js/openfoodfacts.js',
+  'js/vendor/zxing.min.js',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/apple-touch-icon.png',
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // cache: 'reload' evita la caché HTTP del navegador: así nunca se mezclan archivos de versiones distintas.
+  const requests = ASSETS.map((url) => new Request(url, { cache: 'reload' }));
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(requests)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {

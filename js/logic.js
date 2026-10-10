@@ -42,4 +42,24 @@ export const matchesQuery = (p, query) => {
   return q.split(' ').every((word) => text.includes(word));
 };
 
-export const byName = (a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
+// Un producto puede tener varios códigos (por ejemplo, la misma leche de dos marcas), separados por coma.
+export const barcodesOf = (p) => String(p?.barcode ?? '').split(/[\s,;]+/).filter(Boolean);
+
+// Clave para comparar códigos: en los numéricos se ignoran los ceros iniciales (UPC-A = EAN-13 con un 0 delante).
+export const barcodeKey = (code) => {
+  const clean = String(code ?? '').trim().toUpperCase();
+  return /^\d+$/.test(clean) ? clean.replace(/^0+/, '') : clean;
+};
+
+export const hasBarcode = (p, code) => {
+  const key = barcodeKey(code);
+  return !!key && barcodesOf(p).some((c) => barcodeKey(c) === key);
+};
+
+export const addBarcode = (current, code) => {
+  const codes = barcodesOf({ barcode: current });
+  if (!codes.some((c) => barcodeKey(c) === barcodeKey(code))) codes.push(code);
+  return codes.join(', ');
+};
+
+export const byName =(a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });

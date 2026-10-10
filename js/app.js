@@ -1,10 +1,13 @@
 import * as db from './db.js';
 import {
   uid, needsRestock, suggestedQty, validateLevels, normalize, productLabel, matchesQuery, byName,
+  barcodesOf, hasBarcode, addBarcode,
 } from './logic.js';
 import { RECOMMENDATIONS } from './recommendations.js';
+import { createScanner, cameraErrorMessage } from './scanner.js';
+import { lookupProduct } from './openfoodfacts.js';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const DEFAULT_ROOMS = ['Cocina', 'Baño', 'Dormitorio', 'Lavandería', 'Bodega'];
 const CART_KEY = 'despensa.cart';
 const RECS_DRAFT_KEY = 'despensa.recsDraft';
@@ -77,6 +80,7 @@ const roomById = (id) => state.rooms.find((r) => r.id === id);
 const roomName = (id) => roomById(id)?.name ?? 'Sin habitación';
 const sortedRooms = () => [...state.rooms].sort((a, b) => a.order - b.order || byName(a, b));
 const productById = (id) => state.products.find((p) => p.id === id);
+const findByBarcode = (code) => state.products.find((p) => hasBarcode(p, code));
 const shoppingItems = () => {
   const order = new Map(sortedRooms().map((r, i) => [r.id, i]));
   return state.products
@@ -85,6 +89,8 @@ const shoppingItems = () => {
 };
 
 const ICONS = {
+  barcode: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M10 8v8M13 8v8M17 8v8"/></svg>',
+  flash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg>',
   minus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>',
   plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
   gear: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
@@ -317,7 +323,10 @@ function inicioHTML() {
       <button type="button" role="tab" data-action="mode" data-mode="reponer" aria-selected="${state.mode === 'reponer'}">Reponer</button>
     </div>
     ${pending ? `<button type="button" class="banner" data-action="go" data-view="lista">${plural(pending, 'producto', 'productos')} en tu lista de compras →</button>` : ''}
-    <input class="search" type="search" placeholder="Buscar producto…" value="${esc(state.query.inicio)}" data-search="inicio" autocomplete="off">
+    <div class="search-row">
+      <input class="search" type="search" placeholder="Buscar producto…" value="${esc(state.query.inicio)}" data-search="inicio" autocomplete="off">
+      <button type="button" class="scan-btn" data-action="scan-stock" aria-label="${state.mode === 'descontar' ? 'Descontar' : 'Reponer'} escaneando el código de barras">${ICONS.barcode}</button>
+    </div>
     <div id="results">${inicioResultsHTML()}</div>`;
 }
 
@@ -565,7 +574,10 @@ function openAddSheet() {
         <span class="option-title">Productos habituales</span>
         <span class="option-text">Elige varios de una lista de productos comunes del hogar.</span>
       </button>
-      ${soon('Escanear código de barras', 'Busca el producto automáticamente.')}
+      <button type="button" class="option" data-action="add-scan">
+        <span class="option-title">Escanear código de barras</span>
+        <span class="option-text">Busca nombre, marca, tamaño y foto automáticamente.</span>
+      </button>
       ${soon('Fotografía del producto', 'Reconoce el producto desde una foto.')}
       ${soon('Escanear boleta', 'Agrega varios productos desde una boleta.')}
     </div>`);
@@ -573,6 +585,7 @@ function openAddSheet() {
     const action = e.target.closest('[data-action]')?.dataset.action;
     if (action === 'add-manual') openProductSheet(null);
     if (action === 'add-recs') openRecommendations();
+    if (action === 'add-scan') scanToAdd();
     if (action === 'resume-draft') openSetupSheet(loadRecsDraft().items);
   });
 }
@@ -635,16 +648,17 @@ function movementLine(m, withName) {
     </li>`;
 }
 
-function openProductSheet(product) {
+function openProductSheet(product, prefill = {}) {
   const isNew = !product;
   const defaultRoom = state.roomFilter !== 'all' && roomById(state.roomFilter) ? state.roomFilter : sortedRooms()[0]?.id;
   const d = product ?? {
-    name: '', brand: '', size: '', roomId: defaultRoom ?? NO_ROOM, barcode: '', photo: null, stock: 1, max: 4, reorder: 1,
+    name: '', brand: '', size: '', roomId: defaultRoom ?? NO_ROOM, barcode: '', photo: null, stock: 1, max: 4, reorder: 1, ...prefill,
   };
   let photo = d.photo ?? null;
 
   const sheet = openSheet(`
     <h2>${isNew ? 'Nuevo producto' : 'Editar producto'}</h2>
+    <p class="lookup" id="lookupStatus" role="status" hidden></p>
     <form id="productForm" novalidate>
       <div class="photo-field">
         <div class="photo-preview" id="photoPreview"></div>
@@ -661,7 +675,8 @@ function openProductSheet(product) {
           <label>Tamaño<input name="size" value="${esc(d.size)}" maxlength="30" autocomplete="off" placeholder="Ej: 1 L"></label>
         </div>
         <label>Habitación<select name="roomId" data-room-select>${roomOptions(d.roomId)}</select></label>
-        <label>Código de barras<input name="barcode" value="${esc(d.barcode)}" inputmode="numeric" maxlength="20" autocomplete="off" placeholder="Opcional"></label>
+        <label>Código de barras<input name="barcode" value="${esc(d.barcode)}" maxlength="120" autocomplete="off" placeholder="Opcional"></label>
+        <p class="muted small field-note">Si el producto tiene varios códigos (por ejemplo, dos marcas), sepáralos con coma.</p>
       </fieldset>
       <fieldset>
         <legend>Cantidades</legend>
@@ -727,7 +742,12 @@ function openProductSheet(product) {
       photo,
       ...readLevels(),
     };
-    const error = !data.name ? 'El nombre es obligatorio.' : validateLevels(data);
+    const taken = barcodesOf(data)
+      .map((code) => [code, state.products.find((p) => p.id !== product?.id && hasBarcode(p, code))])
+      .find(([, owner]) => owner);
+    const error = !data.name ? 'El nombre es obligatorio.'
+      : taken ? `El código ${taken[0]} ya pertenece a "${productLabel(taken[1])}".`
+        : validateLevels(data);
     if (error) { $('#formError', sheet).textContent = error; return; }
     const duplicate = state.products.find((p) => p.id !== product?.id && normalize(productLabel(p)) === normalize(productLabel(data)));
     if (duplicate && !confirm(`Ya existe "${productLabel(duplicate)}" en el inventario. ¿Guardar de todas formas?`)) return;
@@ -770,6 +790,242 @@ function openProductSheet(product) {
         : '<li class="muted">Sin movimientos.</li>';
     });
   }
+
+  // Permite a quien abrió la hoja completarla después (por ejemplo, con datos de Open Food Facts).
+  return {
+    isOpen: () => sheetEls?.sheet === sheet,
+    status(text, kind = '') {
+      const el = $('#lookupStatus', sheet);
+      el.hidden = !text;
+      el.textContent = text;
+      el.className = `lookup ${kind}`;
+    },
+    fillIfEmpty(fields) {
+      for (const [name, value] of Object.entries(fields)) {
+        if (value && !form.elements[name].value.trim()) form.elements[name].value = value;
+      }
+    },
+    setPhotoIfEmpty(dataUrl) {
+      if (photo) return;
+      photo = dataUrl;
+      showPhoto();
+    },
+  };
+}
+
+// ---------- Código de barras ----------
+
+const LOOKUP_MESSAGES = {
+  'not-found': 'No encontramos este código en Open Food Facts. Completa los datos a mano; desde ahora la app lo reconocerá.',
+  offline: 'Sin conexión: completa los datos a mano.',
+  timeout: 'Open Food Facts no respondió a tiempo. Completa los datos a mano.',
+  error: 'No se pudo consultar Open Food Facts. Completa los datos a mano.',
+};
+
+// Hoja con la cámara. onCode(código, ui) se llama por cada código leído o escrito a mano.
+function openScannerSheet({ title, hint, onCode }) {
+  let scanner = null;
+  const sheet = openSheet(`
+    <h2>${esc(title)}</h2>
+    ${hint ? `<p class="muted">${esc(hint)}</p>` : ''}
+    <div class="scanner">
+      <video muted playsinline></video>
+      <div class="scanner-frame" aria-hidden="true"></div>
+      <button type="button" class="scanner-torch" hidden aria-label="Linterna" aria-pressed="false">${ICONS.flash}</button>
+    </div>
+    <p class="scan-status" id="scanStatus" role="status">Abriendo la cámara…</p>
+    <div id="scanResult" aria-live="polite"></div>
+    <form class="inline-form" id="manualCode">
+      <input name="code" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="O escribe el número del código" aria-label="Número del código de barras">
+      <button type="submit" class="secondary">Usar</button>
+    </form>`, { onClose: () => scanner?.stop() });
+
+  const ui = {
+    sheet,
+    status: (text) => { $('#scanStatus', sheet).textContent = text; },
+    result: (html) => { $('#scanResult', sheet).innerHTML = html; },
+  };
+  let last = { code: '', seen: 0 };
+  const handle = (raw, { manual = false } = {}) => {
+    const code = String(raw).trim();
+    if (!code) return;
+    const now = Date.now();
+    // Mientras el mismo código siga frente a la cámara no se vuelve a contar;
+    // cuenta de nuevo solo si dejó de verse un momento (por ejemplo, el siguiente envase igual).
+    if (!manual && code === last.code && now - last.seen < 1200) {
+      last.seen = now;
+      return;
+    }
+    last = { code, seen: now };
+    navigator.vibrate?.(60);
+    onCode(code, ui);
+  };
+
+  scanner = createScanner($('video', sheet), handle);
+  scanner.start()
+    .then((torch) => {
+      if (sheetEls?.sheet !== sheet) return;
+      ui.status('Apunta al código de barras y mantenlo dentro del recuadro.');
+      const torchBtn = $('.scanner-torch', sheet);
+      if (!torch) return;
+      torchBtn.hidden = false;
+      torchBtn.addEventListener('click', () => {
+        const on = torchBtn.getAttribute('aria-pressed') !== 'true';
+        torchBtn.setAttribute('aria-pressed', String(on));
+        torch(on).catch(() => {});
+      });
+    })
+    .catch((err) => {
+      if (sheetEls?.sheet !== sheet) return;
+      $('.scanner', sheet).classList.add('off');
+      ui.status(cameraErrorMessage(err));
+    });
+
+  $('#manualCode', sheet).addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = e.target.elements.code;
+    handle(input.value, { manual: true });
+    input.value = '';
+  });
+  return ui;
+}
+
+function scanToAdd() {
+  openScannerSheet({
+    title: 'Escanear código',
+    hint: 'Apunta la cámara al código de barras del producto nuevo.',
+    onCode: (code) => {
+      closeSheet();
+      addByBarcode(code);
+    },
+  });
+}
+
+async function fetchPhoto(url) {
+  try {
+    const res = await fetch(url);
+    return res.ok ? await resizeImage(await res.blob()) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function addByBarcode(code) {
+  const existing = findByBarcode(code);
+  if (existing) {
+    openProductSheet(existing);
+    toast(`${existing.name} ya está en tu inventario.`);
+    return;
+  }
+  const editor = openProductSheet(null, { barcode: code });
+  editor.status('Buscando el producto en Open Food Facts…');
+  const info = await lookupProduct(code);
+  if (!editor.isOpen()) return;
+  if (info.status !== 'found') {
+    editor.status(LOOKUP_MESSAGES[info.status], 'warn');
+    return;
+  }
+  editor.fillIfEmpty({ name: info.name, brand: info.brand, size: info.size });
+  editor.status('Datos sugeridos por Open Food Facts. Revísalos y completa las cantidades.', 'ok');
+  if (info.imageUrl) {
+    const photo = await fetchPhoto(info.imageUrl);
+    if (photo && editor.isOpen()) editor.setPhotoIfEmpty(photo);
+  }
+}
+
+// Escaneo continuo desde Inicio: cada código descuenta o suma 1 unidad.
+function scanStock() {
+  const descontar = state.mode === 'descontar';
+  const delta = descontar ? -1 : 1;
+  let paused = false;
+  let pendingCode = '';
+  let lastMovs = null;
+  const ui = openScannerSheet({
+    title: descontar ? 'Descontar escaneando' : 'Reponer escaneando',
+    hint: descontar ? 'Cada código que escanees descuenta 1 unidad.' : 'Cada código que escanees suma 1 unidad.',
+    onCode: async (code) => {
+      if (paused) return;
+      const p = findByBarcode(code);
+      if (!p) {
+        paused = true;
+        pendingCode = code;
+        ui.result(`
+          <div class="scan-card warn">
+            <p>El código <strong>${esc(code)}</strong> no está en tu inventario.</p>
+            <div class="scan-actions">
+              <button type="button" class="primary small" data-scan="assign">Es un producto que ya tengo</button>
+              <button type="button" class="secondary small" data-scan="create">Crear producto nuevo</button>
+              <button type="button" class="link" data-scan="continue">Seguir escaneando</button>
+            </div>
+          </div>`);
+        return;
+      }
+      if (descontar && p.stock === 0) {
+        ui.result(`<div class="scan-card warn"><p>No queda stock de <strong>${esc(p.name)}</strong>.</p></div>`);
+        return;
+      }
+      const movs = await changeStock([{ id: p.id, delta }], descontar ? 'consumo' : 'reposicion');
+      lastMovs = movs;
+      render();
+      const now = productById(p.id);
+      ui.result(`
+        <div class="scan-card ok">
+          <p><strong>${esc(productLabel(now))}</strong> ${delta < 0 ? '−1' : '+1'} · quedan ${now.stock}${needsRestock(now) ? ' · <span class="tag low">en Mi lista</span>' : ''}</p>
+          <button type="button" class="link" data-scan="undo">Deshacer</button>
+        </div>`);
+    },
+  });
+
+  ui.sheet.addEventListener('click', async (e) => {
+    const action = e.target.closest('[data-scan]')?.dataset.scan;
+    if (action === 'undo' && lastMovs) {
+      await undoMovements(lastMovs);
+      lastMovs = null;
+      ui.result('<div class="scan-card"><p>Deshecho.</p></div>');
+    } else if (action === 'continue') {
+      paused = false;
+      ui.result('');
+    } else if (action === 'create') {
+      closeSheet();
+      addByBarcode(pendingCode);
+    } else if (action === 'assign') {
+      closeSheet();
+      openAssignSheet(pendingCode, delta);
+    }
+  });
+}
+
+// Asocia un código desconocido a un producto existente (por ejemplo, los creados desde productos habituales).
+function openAssignSheet(code, delta = 0) {
+  const sheet = openSheet(`
+    <h2>¿Qué producto es?</h2>
+    <p class="muted">Elige el producto con el código <strong>${esc(code)}</strong>. Desde ahora la app lo reconocerá al escanear.</p>
+    <input class="search" type="search" placeholder="Buscar producto…" autocomplete="off" id="assignSearch">
+    <ul class="list" id="assignList"></ul>`);
+  const list = $('#assignList', sheet);
+  const draw = () => {
+    const found = state.products.filter((p) => matchesQuery(p, $('#assignSearch', sheet).value)).sort(byName);
+    list.innerHTML = found.length
+      ? found.map((p) => productRow(p, { action: 'assign' })).join('')
+      : '<li class="row empty-row">Sin resultados.</li>';
+  };
+  draw();
+  $('#assignSearch', sheet).addEventListener('input', draw);
+  list.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-action=assign]');
+    if (!btn) return;
+    const p = productById(btn.dataset.id);
+    const updated = { ...p, barcode: addBarcode(p.barcode, code), updatedAt: Date.now() };
+    await db.write([{ store: 'products', put: updated }]);
+    replaceProduct(updated);
+    closeSheet();
+    if (delta && !(delta < 0 && updated.stock === 0)) {
+      await applyStock(updated.id, delta);
+    } else {
+      render();
+      toast(`Código asignado a ${updated.name}.`);
+    }
+  });
 }
 
 function openRecommendations() {
@@ -1147,6 +1403,7 @@ function bindEvents() {
       case 'qty': openQtySheet(productById(id)); break;
       case 'edit': openProductSheet(productById(id)); break;
       case 'add': openAddSheet(); break;
+      case 'scan-stock': scanStock(); break;
       case 'resume-draft': openSetupSheet(loadRecsDraft()?.items ?? []); break;
       case 'discard-draft':
         if (!confirm('¿Descartar los productos que no terminaste de configurar?')) return;

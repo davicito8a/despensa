@@ -16,6 +16,22 @@
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="css/styles.css">
   <script type="module" src="js/app.js"></script>
+  <script>
+    // Rescate: si la app no logra mostrarse (por ejemplo, archivos en caché de versiones distintas tras
+    // una actualización), borra la caché de archivos —no los datos— y recarga una sola vez.
+    setTimeout(async () => {
+      if (document.getElementById('view')?.children.length) return;
+      try {
+        if (sessionStorage.getItem('despensa.rescued')) return;
+        sessionStorage.setItem('despensa.rescued', '1');
+        const regs = await navigator.serviceWorker?.getRegistrations?.() ?? [];
+        await Promise.all(regs.map((r) => r.unregister()));
+        const keys = await caches?.keys?.() ?? [];
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      } catch { /* sin acceso a caché: recargar igual */ }
+      location.reload();
+    }, 6000);
+  </script>
 </head>
 <body>
   <main id="view" class="view"></main>
