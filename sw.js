@@ -1,7 +1,7 @@
 // Service worker: permite abrir la app sin conexión (por ejemplo, en el supermercado).
 // Estrategia: responde al instante desde la caché y actualiza en segundo plano.
 // Al publicar cambios, sube CACHE para forzar la descarga de todos los archivos.
-const CACHE = 'despensa-v4';
+const CACHE = 'despensa-v5';
 const ASSETS = [
   './',
   'index.html',

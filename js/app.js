@@ -8,7 +8,7 @@ import { createScanner, cameraErrorMessage } from './scanner.js';
 import { lookupProduct } from './openfoodfacts.js';
 import { FIREBASE_CONFIG } from './firebase-config.js';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 const DEFAULT_ROOMS = ['Cocina', 'Baño', 'Dormitorio', 'Lavandería', 'Bodega'];
 const CART_KEY = 'despensa.cart';
 const RECS_DRAFT_KEY = 'despensa.recsDraft';
@@ -229,6 +229,15 @@ function toast(message, undo) {
     }, { once: true });
   }
   toastTimer = setTimeout(() => { el.hidden = true; }, undo ? 6000 : 2500);
+}
+
+// Muestra un aviso cuando no haya otro con "Deshacer" a la vista, para no quitarle esa opción al usuario.
+async function toastWhenFree(message) {
+  const el = $('#toast');
+  for (let waited = 0; !el.hidden && $('[data-undo]', el) && waited < 8000; waited += 300) {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  toast(message);
 }
 
 let sheetEls = null;
@@ -768,6 +777,10 @@ function openProductSheet(product, prefill = {}) {
     closeSheet();
     render();
     toast(isNew ? `${saved.name} agregado al inventario.` : 'Cambios guardados.');
+    // Si se escribió un código nuevo, completa con Open Food Facts lo que falte (al escanear ya se consultó).
+    const previous = { barcode: product?.barcode ?? prefill.barcode ?? '' };
+    const newCode = barcodesOf(saved).find((code) => !hasBarcode(previous, code));
+    if (newCode) enrichFromBarcode(saved.id, newCode);
   });
 
   if (!isNew) {
@@ -937,6 +950,35 @@ async function addByBarcode(code) {
   }
 }
 
+// Completa con Open Food Facts solo los datos que le faltan a un producto existente.
+// Nunca reemplaza lo que el usuario escribió; si no hay internet o no se encuentra, no hace nada.
+async function enrichFromBarcode(id, code) {
+  const missing = (p) => ({ brand: !p.brand, size: !p.size, photo: !p.photo });
+  const before = productById(id);
+  if (!before || !Object.values(missing(before)).some(Boolean)) return;
+  const info = await lookupProduct(code);
+  if (info.status !== 'found') return;
+  const photo = missing(before).photo && info.imageUrl ? await fetchPhoto(info.imageUrl) : null;
+
+  const current = productById(id); // puede haber cambiado mientras se consultaba
+  if (!current) return;
+  const gaps = missing(current);
+  const patch = {};
+  if (gaps.brand && info.brand) patch.brand = info.brand;
+  if (gaps.size && info.size) patch.size = info.size;
+  if (gaps.photo && photo) patch.photo = photo;
+  if (!Object.keys(patch).length) return;
+
+  const updated = { ...current, ...patch, updatedAt: Date.now() };
+  await db.write([{ store: 'products', put: updated }]);
+  replaceProduct(updated);
+  render();
+  const names = { brand: 'marca', size: 'tamaño', photo: 'foto' };
+  const list = Object.keys(patch).map((k) => names[k]);
+  const joined = list.length > 1 ? `${list.slice(0, -1).join(', ')} y ${list.at(-1)}` : list[0];
+  toastWhenFree(`${updated.name}: se agregó ${joined} desde Open Food Facts.`);
+}
+
 // Escaneo continuo desde Inicio: cada código descuenta o suma 1 unidad.
 function scanStock() {
   const descontar = state.mode === 'descontar';
@@ -1023,6 +1065,7 @@ function openAssignSheet(code, delta = 0) {
     await db.write([{ store: 'products', put: updated }]);
     replaceProduct(updated);
     closeSheet();
+    enrichFromBarcode(updated.id, code);
     if (delta && !(delta < 0 && updated.stock === 0)) {
       await applyStock(updated.id, delta);
     } else {
