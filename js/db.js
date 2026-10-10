@@ -41,10 +41,20 @@ export async function getAllByIndex(store, index, key) {
   return asPromise(db.transaction(store).objectStore(store).index(index).getAll(key));
 }
 
+// Quien quiera enterarse de cada cambio guardado (por ejemplo, la copia en la nube).
+const writeListeners = new Set();
+export const onWrite = (fn) => writeListeners.add(fn);
+
 // Aplica varias operaciones en una sola transacción: o se guardan todas o ninguna.
 // ops: [{ store, put: valor } | { store, del: id } | { store, clear: true }]
-export async function write(ops) {
+// silent: no avisa a los oyentes (se usa al aplicar cambios que vienen de la nube).
+export async function write(ops, { silent = false } = {}) {
   if (!ops.length) return;
+  await writeLocal(ops);
+  if (!silent) writeListeners.forEach((fn) => fn(ops));
+}
+
+async function writeLocal(ops) {
   const db = await openDB();
   const tx = db.transaction([...new Set(ops.map((op) => op.store))], 'readwrite');
   for (const op of ops) {

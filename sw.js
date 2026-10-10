@@ -1,7 +1,7 @@
 // Service worker: permite abrir la app sin conexión (por ejemplo, en el supermercado).
 // Estrategia: responde al instante desde la caché y actualiza en segundo plano.
 // Al publicar cambios, sube CACHE para forzar la descarga de todos los archivos.
-const CACHE = 'despensa-v3';
+const CACHE = 'despensa-v4';
 const ASSETS = [
   './',
   'index.html',
@@ -14,6 +14,11 @@ const ASSETS = [
   'js/scanner.js',
   'js/openfoodfacts.js',
   'js/vendor/zxing.min.js',
+  'js/firebase-config.js',
+  'js/cloud.js',
+  'js/vendor/firebase/firebase-app.js',
+  'js/vendor/firebase/firebase-auth.js',
+  'js/vendor/firebase/firebase-firestore.js',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/apple-touch-icon.png',

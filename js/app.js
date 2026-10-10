@@ -6,8 +6,9 @@ import {
 import { RECOMMENDATIONS } from './recommendations.js';
 import { createScanner, cameraErrorMessage } from './scanner.js';
 import { lookupProduct } from './openfoodfacts.js';
+import { FIREBASE_CONFIG } from './firebase-config.js';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const DEFAULT_ROOMS = ['Cocina', 'Baño', 'Dormitorio', 'Lavandería', 'Bodega'];
 const CART_KEY = 'despensa.cart';
 const RECS_DRAFT_KEY = 'despensa.recsDraft';
@@ -89,6 +90,7 @@ const shoppingItems = () => {
 };
 
 const ICONS = {
+  cloud: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 19H7a5 5 0 1 1 .9-9.9A6 6 0 0 1 19.4 11a4 4 0 0 1-1.9 8z"/></svg>',
   barcode: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M10 8v8M13 8v8M17 8v8"/></svg>',
   flash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg>',
   minus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>',
@@ -516,11 +518,13 @@ function inventarioHTML() {
     <header class="topbar">
       <h1>Inventario</h1>
       <div class="topbar-actions">
+        ${cloudButtonHTML()}
         <button type="button" class="icon-btn" data-action="settings" aria-label="Ajustes">${ICONS.gear}</button>
         <button type="button" class="primary small" data-action="add">${ICONS.plus}<span>Agregar</span></button>
       </div>
     </header>
     ${draftBannerHTML()}
+    ${cloudNudgeHTML()}
     <input class="search" type="search" placeholder="Buscar en el inventario…" value="${esc(state.query.inventario)}" data-search="inventario" autocomplete="off">
     <div class="chips" role="tablist" aria-label="Habitación">
       ${chips.map((c) => `<button type="button" class="chip" data-action="room-filter" data-room="${c.id}" aria-selected="${state.roomFilter === c.id}">${esc(c.name)}</button>`).join('')}
@@ -1208,6 +1212,11 @@ function openSettings() {
   const sheet = openSheet(`
     <h2>Ajustes</h2>
     <section class="settings-section">
+      <h3>Copia en la nube</h3>
+      <p class="cloud-status" data-cloud-indicator data-state="${cloudStatus().kind}"><span class="dot"></span><span data-cloud-text>${esc(cloudStatus().text)}</span></p>
+      ${FIREBASE_CONFIG ? `<button type="button" class="secondary block" data-action="account">${cloudState.user ? 'Administrar cuenta' : 'Activar copia en la nube'}</button>` : ''}
+    </section>
+    <section class="settings-section">
       <h3>Habitaciones</h3>
       <ul class="list">
         ${sortedRooms().map((r) => `
@@ -1228,7 +1237,9 @@ function openSettings() {
     </section>
     <section class="settings-section">
       <h3>Respaldo</h3>
-      <p class="muted">Tus datos se guardan solo en este teléfono. Exporta un respaldo de vez en cuando (por ejemplo a iCloud Drive o Google Drive).</p>
+      <p class="muted">${cloudState.user
+        ? 'Tus datos ya se guardan en tu cuenta. El respaldo es una copia adicional en un archivo.'
+        : 'Tus datos se guardan solo en este teléfono. Exporta un respaldo de vez en cuando (por ejemplo a iCloud Drive o Google Drive).'}</p>
       <div class="two">
         <button type="button" class="secondary" data-action="export">Exportar</button>
         <label class="secondary file-btn">Importar<input type="file" accept="application/json,.json" id="importInput" hidden></label>
@@ -1282,6 +1293,9 @@ function openSettings() {
       }
       case 'history':
         openHistory();
+        break;
+      case 'account':
+        openAccountSheet();
         break;
       case 'export':
         exportBackup();
@@ -1353,6 +1367,286 @@ async function importBackup(file) {
   toast('Respaldo importado.');
 }
 
+// ---------- Copia en la nube ----------
+// El teléfono sigue siendo la fuente principal. Con una cuenta activa, cada cambio se copia a Firebase
+// y los cambios hechos desde otro teléfono con la misma cuenta llegan aquí.
+
+const CLOUD_UID_KEY = 'despensa.cloudUid';
+const CLOUD_NUDGE_KEY = 'despensa.cloudNudgeUntil';
+const cloudState = { loaded: false, error: '', user: null };
+let cloud = null;
+let earlyOps = []; // cambios hechos mientras la nube aún se estaba cargando
+
+function readKey(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeKey(key, value) {
+  try {
+    if (value == null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    /* sin almacenamiento local */
+  }
+}
+
+db.onWrite((ops) => {
+  if (cloud && cloudState.user) cloud.push(ops);
+  else if (FIREBASE_CONFIG && readKey(CLOUD_UID_KEY)) earlyOps.push(...ops);
+});
+
+function cloudStatus() {
+  if (!FIREBASE_CONFIG) return { kind: 'off', text: 'La copia en la nube aún no está configurada.' };
+  if (cloudState.error) return { kind: 'error', text: cloudState.error };
+  if (!cloudState.user) return { kind: 'off', text: 'Desactivada: tus datos están solo en este teléfono.' };
+  if (!navigator.onLine) return { kind: 'pending', text: 'Sin conexión: los cambios se subirán cuando vuelva internet.' };
+  if (cloud.hasPendingWrites()) return { kind: 'pending', text: 'Subiendo cambios…' };
+  return { kind: 'ok', text: 'Todo está guardado en tu cuenta.' };
+}
+
+// Actualiza los indicadores sin redibujar la pantalla (no interrumpe lo que se esté escribiendo).
+function updateCloudIndicators() {
+  const status = cloudStatus();
+  for (const el of $$('[data-cloud-indicator]')) el.dataset.state = status.kind;
+  for (const el of $$('[data-cloud-text]')) el.textContent = status.text;
+}
+
+function cloudButtonHTML() {
+  if (!FIREBASE_CONFIG) return '';
+  return `<button type="button" class="icon-btn cloud-btn" data-action="account" data-cloud-indicator data-state="${cloudStatus().kind}" aria-label="Copia en la nube">${ICONS.cloud}</button>`;
+}
+
+function cloudNudgeHTML() {
+  if (!FIREBASE_CONFIG || !cloudState.loaded || cloudState.user || !state.products.length) return '';
+  if (Number(readKey(CLOUD_NUDGE_KEY) ?? 0) > Date.now()) return '';
+  return `
+    <div class="banner draft cloud-nudge">
+      <span>Activa la copia en la nube para no perder tu inventario si cambias de teléfono.</span>
+      <span class="banner-actions">
+        <button type="button" class="link" data-action="snooze-cloud">Ahora no</button>
+        <button type="button" class="primary small" data-action="account">Activar</button>
+      </span>
+    </div>`;
+}
+
+async function initCloud() {
+  if (!FIREBASE_CONFIG) return;
+  try {
+    cloud = await import('./cloud.js');
+    cloud.init(FIREBASE_CONFIG, { onStatus: updateCloudIndicators });
+    const user = await cloud.ready();
+    cloudState.loaded = true;
+    if (!user) {
+      earlyOps = [];
+    } else if (readKey(CLOUD_UID_KEY) === user.uid) {
+      cloudState.user = user;
+      const ops = earlyOps;
+      earlyOps = [];
+      await cloud.push(ops);
+      startListening();
+    } else {
+      await linkAccount(user); // sesión abierta pero sin terminar de vincular (por ejemplo, se cortó internet)
+    }
+  } catch (err) {
+    console.warn(err);
+    cloudState.error = 'No se pudo conectar con la nube. Tus datos siguen guardados en el teléfono.';
+  }
+  render();
+}
+
+function startListening() {
+  cloud.listen(applyRemote, (err) => {
+    console.warn(err);
+    cloudState.error = 'Se perdió la conexión con la nube. Cierra y vuelve a abrir la app.';
+    updateCloudIndicators();
+  });
+}
+
+// Compara dos objetos sin importar el orden de sus campos.
+const stable = (value) => JSON.stringify(value, (_, v) => (
+  v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v
+));
+
+async function applyRemote(store, { full, ops }) {
+  const local = state[store];
+  let changes = ops;
+  if (full) {
+    if (!full.length && local.length) {
+      // La nube está vacía pero el teléfono no: nunca se borra lo local; se vuelve a subir.
+      cloud.push(local.map((value) => ({ store, put: value })));
+      return;
+    }
+    const remoteIds = new Set(full.map((x) => x.id));
+    changes = [
+      ...local.filter((x) => !remoteIds.has(x.id)).map((x) => ({ store, del: x.id })),
+      ...full.map((x) => ({ store, put: x })),
+    ];
+  }
+  changes = changes.filter((op) => {
+    const current = local.find((x) => x.id === ('del' in op ? op.del : op.put.id));
+    return 'del' in op ? !!current : !current || stable(current) !== stable(op.put);
+  });
+  if (!changes.length) return;
+  await db.write(changes, { silent: true });
+  for (const op of changes) {
+    if ('del' in op) {
+      state[store] = state[store].filter((x) => x.id !== op.del);
+    } else {
+      const i = state[store].findIndex((x) => x.id === op.put.id);
+      if (i >= 0) state[store][i] = op.put;
+      else state[store].push(op.put);
+    }
+  }
+  if (store === 'extras') state.extras.sort((a, b) => a.createdAt - b.createdAt);
+  if (store === 'rooms' && state.roomFilter !== 'all' && state.roomFilter !== NO_ROOM && !roomById(state.roomFilter)) {
+    state.roomFilter = 'all';
+  }
+  render();
+}
+
+// Une los datos del teléfono con los de la cuenta la primera vez que se entra.
+async function linkAccount(user) {
+  const remote = await cloud.fetchAll();
+  const localMovements = await db.getAll('movements');
+  const pristine = !state.products.length && !state.extras.length;
+  const remoteHasData = db.STORES.some((store) => remote[store].length);
+  const ops = [];
+  let upload = [];
+
+  if (pristine && remoteHasData) {
+    // Teléfono nuevo: se usa lo que hay en la cuenta.
+    for (const store of db.STORES) ops.push({ store, clear: true });
+  } else {
+    // Se suben los datos del teléfono. Las habitaciones con el mismo nombre se unen para no duplicarlas.
+    const twins = new Map();
+    for (const room of state.rooms) {
+      const twin = remote.rooms.find((r) => normalize(r.name) === normalize(room.name));
+      if (twin) twins.set(room.id, twin.id);
+    }
+    const remap = (p) => (twins.has(p.roomId) ? { ...p, roomId: twins.get(p.roomId) } : p);
+    upload = [
+      ...state.rooms.filter((r) => !twins.has(r.id)).map((r) => ({ store: 'rooms', put: r })),
+      ...state.products.map((p) => ({ store: 'products', put: remap(p) })),
+      ...state.extras.map((x) => ({ store: 'extras', put: x })),
+      ...localMovements.map((m) => ({ store: 'movements', put: m })),
+    ];
+    ops.push(...[...twins.keys()].map((id) => ({ store: 'rooms', del: id })));
+  }
+  for (const store of db.STORES) for (const value of remote[store]) ops.push({ store, put: value });
+  ops.push(...upload);
+
+  await db.write(ops, { silent: true });
+  cloudState.user = user;
+  cloudState.error = '';
+  writeKey(CLOUD_UID_KEY, user.uid);
+  earlyOps = [];
+  await cloud.push(upload);
+  await loadAll();
+  if (!state.rooms.length) await seedRooms();
+  startListening();
+  render();
+}
+
+function cloudErrorMessage(err) {
+  if (err?.code === 'permission-denied') return 'Firebase rechazó el acceso: revisa las reglas de Firestore.';
+  if (err?.code === 'unavailable') return 'Sin conexión a internet.';
+  return cloud?.authErrorMessage(err) ?? 'No se pudo conectar con la nube.';
+}
+
+function openAccountSheet() {
+  if (!FIREBASE_CONFIG) {
+    openSheet('<h2>Copia en la nube</h2><p class="muted">La copia en la nube aún no está configurada.</p>');
+    return;
+  }
+  const user = cloudState.user;
+  const status = cloudStatus();
+  const sheet = openSheet(user ? `
+    <h2>Copia en la nube</h2>
+    <p>Conectado como <strong>${esc(user.email)}</strong></p>
+    <p class="cloud-status" data-cloud-indicator data-state="${status.kind}"><span class="dot"></span><span data-cloud-text>${esc(status.text)}</span></p>
+    <p class="muted small">Cada cambio se guarda en tu cuenta. Si cambias de teléfono, instala la app y entra con este correo para recuperar tu inventario.</p>
+    <button type="button" class="secondary block" data-action="logout">Cerrar sesión</button>
+    <p class="muted small">Al cerrar sesión se borran los datos de este teléfono; siguen guardados en tu cuenta.</p>` : `
+    <h2>Copia en la nube</h2>
+    <p class="muted">Guarda tu inventario en tu cuenta para no perderlo si cambias o pierdes el teléfono. Cada cuenta tiene su propio inventario.</p>
+    ${cloudState.error ? `<p class="error">${esc(cloudState.error)}</p>` : ''}
+    <form id="authForm" novalidate>
+      <label>Correo<input name="email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" required></label>
+      <label>Contraseña<input name="password" type="password" autocomplete="current-password" minlength="6" required></label>
+      <p class="error" id="authError" role="alert"></p>
+      <div class="two">
+        <button type="submit" class="primary" data-mode="signin">Entrar</button>
+        <button type="submit" class="secondary" data-mode="signup">Crear cuenta</button>
+      </div>
+      <button type="button" class="link" data-action="reset-password">Olvidé mi contraseña</button>
+    </form>
+    <p class="muted small">Al entrar, los productos que ya tienes en este teléfono se suben a tu cuenta.</p>`);
+
+  sheet.addEventListener('click', async (e) => {
+    const action = e.target.closest('[data-action]')?.dataset.action;
+    if (action === 'logout') await logoutCloud();
+    if (action === 'reset-password') {
+      const email = $('#authForm', sheet).elements.email.value.trim();
+      const error = $('#authError', sheet);
+      if (!email) { error.textContent = 'Escribe tu correo y vuelve a tocar "Olvidé mi contraseña".'; return; }
+      try {
+        await cloud.resetPassword(email);
+        error.textContent = '';
+        toast('Te enviamos un correo para crear una nueva contraseña.');
+      } catch (err) {
+        error.textContent = cloudErrorMessage(err);
+      }
+    }
+  });
+
+  $('#authForm', sheet)?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const mode = e.submitter?.dataset.mode ?? 'signin';
+    const email = form.elements.email.value.trim();
+    const password = form.elements.password.value;
+    const error = $('#authError', sheet);
+    if (!email || !password) { error.textContent = 'Escribe tu correo y contraseña.'; return; }
+    if (!cloud) { error.textContent = 'No se pudo cargar la nube. Revisa tu conexión y vuelve a abrir la app.'; return; }
+    const buttons = $$('button', form);
+    buttons.forEach((b) => { b.disabled = true; });
+    error.textContent = '';
+    e.submitter.textContent = 'Conectando…';
+    try {
+      const cred = mode === 'signup' ? await cloud.signUp(email, password) : await cloud.signIn(email, password);
+      await linkAccount(cred.user);
+      closeSheet();
+      toast(mode === 'signup' ? 'Cuenta creada: tu inventario ya está en la nube.' : 'Listo: tu inventario está sincronizado.');
+    } catch (err) {
+      console.warn(err);
+      error.textContent = cloudErrorMessage(err);
+      buttons.forEach((b) => { b.disabled = false; });
+      $('[data-mode=signin]', form).textContent = 'Entrar';
+      $('[data-mode=signup]', form).textContent = 'Crear cuenta';
+    }
+  });
+}
+
+async function logoutCloud() {
+  if (!confirm('Se borrarán los datos de este teléfono; seguirán guardados en tu cuenta. ¿Cerrar sesión?')) return;
+  try {
+    await cloud.flush();
+  } catch {
+    toast('Hay cambios que aún no se suben a la nube. Conéctate a internet e intenta de nuevo.');
+    return;
+  }
+  await cloud.logout();
+  writeKey(CLOUD_UID_KEY, null);
+  writeKey(CART_KEY, null);
+  writeKey(RECS_DRAFT_KEY, null);
+  await db.write(db.STORES.map((store) => ({ store, clear: true })), { silent: true });
+  location.reload();
+}
+
 // ---------- Eventos de las vistas ----------
 
 function bindEvents() {
@@ -1411,6 +1705,11 @@ function bindEvents() {
         render();
         break;
       case 'settings': openSettings(); break;
+      case 'account': openAccountSheet(); break;
+      case 'snooze-cloud':
+        writeKey(CLOUD_NUDGE_KEY, String(Date.now() + 7 * 24 * 3600 * 1000));
+        render();
+        break;
       case 'room-filter':
         state.roomFilter = btn.dataset.room;
         render();
@@ -1464,6 +1763,9 @@ async function init() {
   bindEvents();
   render();
   navigator.storage?.persist?.().catch(() => {});
+  window.addEventListener('online', updateCloudIndicators);
+  window.addEventListener('offline', updateCloudIndicators);
+  initCloud();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }

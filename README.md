@@ -3,9 +3,31 @@
 Inventario del hogar con lista de compras automática. Es una app web instalable (PWA):
 funciona en iPhone y Android, sin tiendas de apps y sin costo.
 
-Los datos se guardan **solo en el teléfono** (IndexedDB). No hay servidor ni cuentas.
+Los datos se guardan en el teléfono (IndexedDB) y, si el usuario crea una cuenta, también en la nube (Firebase).
 
-## Qué hace (versión 1)
+## Copia en la nube (opcional)
+
+- Inventario → botón de nube (o Ajustes → Copia en la nube): crear cuenta o entrar con correo y contraseña.
+- Al entrar, lo que hay en el teléfono se sube a la cuenta; en un teléfono vacío se descarga lo de la cuenta.
+- Cada cuenta es un inventario independiente (`users/{uid}/...`); las reglas de Firestore impiden ver o
+  modificar los datos de otra cuenta. El dueño del proyecto Firebase sí puede verlos desde la consola.
+- Sin conexión la app funciona igual y los cambios se suben después. El historial se sube y se descarga solo
+  al iniciar sesión, para no gastar la cuota gratuita.
+- Cerrar sesión borra los datos del teléfono (siguen en la cuenta) y no se permite si hay cambios sin subir.
+- Configuración del proyecto: [js/firebase-config.js](js/firebase-config.js). Reglas de Firestore:
+
+  ```
+  rules_version = '2';
+  service cloud.firestore {
+    match /databases/{database}/documents {
+      match /users/{uid}/{document=**} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+    }
+  }
+  ```
+
+## Qué hace
 
 - **Inicio**: descontar (−1 rápido o cantidad exacta) y reponer (+1 o cantidad comprada). Cada acción se puede deshacer.
 - **Mi lista**: se arma sola con los productos cuyo stock actual ≤ nivel de reposición. En el supermercado marcas
@@ -71,5 +93,6 @@ Así los teléfonos descargan la versión nueva: aparece la segunda vez que abre
 | `js/recommendations.js` | Lista de productos habituales |
 | `js/scanner.js` | Cámara y lectura de códigos de barras |
 | `js/openfoodfacts.js` | Búsqueda de productos en Open Food Facts |
-| `js/vendor/` | Librería ZXing y su licencia |
+| `js/cloud.js`, `js/firebase-config.js` | Copia en la nube con Firebase |
+| `js/vendor/` | Librerías ZXing y Firebase, con sus licencias |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Instalación y modo sin conexión |

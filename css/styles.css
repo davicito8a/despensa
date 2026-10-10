@@ -637,6 +637,35 @@ form label input, form label select { margin-top: 4px; color: var(--text); font-
 .empty-row { padding: 0 14px; color: var(--muted); }
 
 
+/* ---------- Nube ---------- */
+
+.cloud-btn { position: relative; }
+.cloud-btn::after {
+  content: '';
+  position: absolute;
+  right: 6px;
+  bottom: 8px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+  background: var(--muted);
+}
+.cloud-btn[data-state="ok"]::after, .cloud-status[data-state="ok"] .dot { background: var(--primary); }
+.cloud-btn[data-state="pending"]::after, .cloud-status[data-state="pending"] .dot { background: var(--warn); }
+.cloud-btn[data-state="error"]::after, .cloud-status[data-state="error"] .dot { background: var(--danger); }
+.cloud-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.cloud-status .dot { flex-shrink: 0; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+
 /* ---------- Toast ---------- */
 
 .toast {
