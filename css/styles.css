@@ -170,7 +170,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
   font-size: 16px; /* evita el zoom automático de iOS */
 }
 .search { margin: 4px 0 8px; }
-input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
 
 .segmented {
   display: grid;
@@ -688,3 +688,38 @@ form label input, form label select { margin-top: 4px; color: var(--text); font-
   .two, .check-grid { grid-template-columns: 1fr; }
   .three { grid-template-columns: 1fr; }
 }
+
+/* ---------- Dictado ---------- */
+
+.voice-text {
+  display: block;
+  width: 100%;
+  min-height: 96px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font: inherit;
+  font-size: 16px; /* evita el zoom automático de iOS */
+  color: inherit;
+  resize: vertical;
+}
+.voice-said { margin: 0 0 12px; color: var(--muted); font-style: italic; }
+.voice-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.voice-row { padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.voice-row.warn { border-color: var(--warn); background: var(--warn-soft); }
+.voice-row.skip { opacity: 0.6; }
+.voice-heard { margin: 0 0 8px; color: var(--muted); font-size: 14px; }
+.voice-select {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 16px;
+}
+.voice-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.voice-controls .segmented { flex: 1 1 170px; margin: 0; }
+.voice-controls .segmented button { min-height: 36px; font-size: 14px; }
+.voice-note { margin: 8px 0 0; color: var(--muted); font-size: 14px; }

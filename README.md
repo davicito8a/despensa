@@ -30,6 +30,11 @@ Los datos se guardan en el teléfono (IndexedDB) y, si el usuario crea una cuent
 ## Qué hace
 
 - **Inicio**: descontar (−1 rápido o cantidad exacta) y reponer (+1 o cantidad comprada). Cada acción se puede deshacer.
+- **Dictar** (botón de micrófono en Inicio): se dice o escribe una frase como *"se acabaron dos leches y un arroz"* o
+  *"compré tres leches y dos paquetes de arroz"*. [js/voice.js](js/voice.js) la interpreta en el teléfono, sin internet,
+  y la app muestra una revisión antes de aplicar nada: si hay varios productos parecidos pregunta cuál (y lo recuerda),
+  no crea productos nuevos y no descuenta más de lo que hay. La base es el dictado del teclado; el botón *Escuchar*
+  aparece solo si el navegador permite reconocer voz.
 - **Mi lista**: se arma sola con los productos cuyo stock actual ≤ nivel de reposición. En el supermercado marcas
   lo que echas al carro, ajustas la cantidad real y tocas *Registrar compra*. También admite artículos sueltos
   que no son parte del inventario, y se puede compartir como texto.

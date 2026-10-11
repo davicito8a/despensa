@@ -6,12 +6,14 @@ import {
 import { RECOMMENDATIONS } from './recommendations.js';
 import { createScanner, cameraErrorMessage } from './scanner.js';
 import { lookupProduct } from './openfoodfacts.js';
+import { parseVoice } from './voice.js';
 import { FIREBASE_CONFIG } from './firebase-config.js';
 
-const APP_VERSION = '1.3.2';
+const APP_VERSION = '1.4.0';
 const DEFAULT_ROOMS = ['Cocina', 'Baño', 'Dormitorio', 'Lavandería', 'Bodega'];
 const CART_KEY = 'despensa.cart';
 const RECS_DRAFT_KEY = 'despensa.recsDraft';
+const VOICE_ALIASES_KEY = 'despensa.voiceAliases';
 const NO_ROOM = '';
 
 const state = {
@@ -91,6 +93,7 @@ const shoppingItems = () => {
 
 const ICONS = {
   cloud: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 19H7a5 5 0 1 1 .9-9.9A6 6 0 0 1 19.4 11a4 4 0 0 1-1.9 8z"/></svg>',
+  mic: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/></svg>',
   barcode: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M10 8v8M13 8v8M17 8v8"/></svg>',
   flash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg>',
   minus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>',
@@ -336,6 +339,7 @@ function inicioHTML() {
     ${pending ? `<button type="button" class="banner" data-action="go" data-view="lista">${plural(pending, 'producto', 'productos')} en tu lista de compras →</button>` : ''}
     <div class="search-row">
       <input class="search" type="search" placeholder="Buscar producto…" value="${esc(state.query.inicio)}" data-search="inicio" autocomplete="off">
+      <button type="button" class="scan-btn" data-action="voice" aria-label="${state.mode === 'descontar' ? 'Descontar' : 'Reponer'} dictando">${ICONS.mic}</button>
       <button type="button" class="scan-btn" data-action="scan-stock" aria-label="${state.mode === 'descontar' ? 'Descontar' : 'Reponer'} escaneando el código de barras">${ICONS.barcode}</button>
     </div>
     <div id="results">${inicioResultsHTML()}</div>`;
@@ -424,6 +428,231 @@ function openQtySheet(p) {
     await applyStock(p.id, descontar ? -qty : qty);
   });
   update();
+}
+
+// ---------- Voz: dictar lo que se usó o se compró ----------
+
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+// Recuerda qué producto eligió el usuario para cada frase ("leche" → Leche entera).
+function loadVoiceAliases() {
+  try {
+    return JSON.parse(localStorage.getItem(VOICE_ALIASES_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveVoiceAliases(aliases) {
+  try {
+    localStorage.setItem(VOICE_ALIASES_KEY, JSON.stringify(aliases));
+  } catch {
+    /* sin almacenamiento local: la próxima vez volverá a preguntar */
+  }
+}
+
+// La base es el dictado del teclado (funciona en cualquier iPhone); "Escuchar" se ofrece si el navegador lo permite.
+function openVoiceSheet(text = '') {
+  const descontar = state.mode === 'descontar';
+  let recognition = null;
+  const sheet = openSheet(`
+    <h2>Dictar</h2>
+    <p class="muted">Toca el micrófono del teclado y di lo que ${descontar ? 'se usó o se terminó' : 'compraste'}. Puedes nombrar varios productos.</p>
+    <form id="voiceForm">
+      <textarea class="voice-text" name="text" rows="3" autocomplete="off" autocapitalize="sentences"
+        placeholder="${descontar ? 'Ej.: se acabaron dos leches y un arroz' : 'Ej.: compré tres leches y dos paquetes de arroz'}">${esc(text)}</textarea>
+      ${SpeechRecognition ? `<button type="button" class="secondary block" data-voice="listen">${ICONS.mic} Escuchar</button>` : ''}
+      <p class="muted small" id="voiceStatus"></p>
+      <p class="error" id="voiceError" role="alert"></p>
+      <button type="submit" class="primary block">Revisar</button>
+    </form>`, { onClose: () => recognition?.abort() });
+  const form = $('#voiceForm', sheet);
+  const area = form.elements.text;
+  const status = $('#voiceStatus', sheet);
+  const error = $('#voiceError', sheet);
+  area.focus();
+
+  $('[data-voice=listen]', sheet)?.addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    if (recognition) { recognition.stop(); return; }
+    const base = area.value.trim();
+    recognition = new SpeechRecognition();
+    recognition.lang = 'es-CL';
+    recognition.interimResults = true;
+    recognition.onresult = (ev) => {
+      const said = [...ev.results].map((r) => r[0].transcript).join(' ').trim();
+      area.value = [base, said].filter(Boolean).join(', ');
+    };
+    recognition.onerror = (ev) => {
+      error.textContent = ev.error === 'no-speech'
+        ? 'No escuché nada. Intenta de nuevo.'
+        : 'No se pudo usar el micrófono aquí. Usa el micrófono del teclado.';
+    };
+    recognition.onend = () => {
+      recognition = null;
+      btn.innerHTML = `${ICONS.mic} Escuchar`;
+      status.textContent = '';
+    };
+    error.textContent = '';
+    try {
+      recognition.start();
+      btn.textContent = 'Detener';
+      status.textContent = 'Escuchando…';
+    } catch {
+      recognition = null;
+      error.textContent = 'No se pudo usar el micrófono aquí. Usa el micrófono del teclado.';
+    }
+  });
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const said = area.value.trim();
+    if (!said) { error.textContent = 'Dicta o escribe qué productos.'; return; }
+    const items = parseVoice(said, state.products, { defaultMode: state.mode, aliases: loadVoiceAliases() });
+    if (!items.length) { error.textContent = 'No reconocí productos en la frase. Nómbralos como están en tu inventario.'; return; }
+    recognition?.abort();
+    openVoiceReview(said, items);
+  });
+}
+
+// Recorre las filas en orden y calcula el efecto real de cada una (con tope en el stock disponible).
+function voicePlan(rows) {
+  const running = new Map();
+  return rows.map((row) => {
+    const p = productById(row.productId);
+    if (!p || !Number.isInteger(row.qty) || row.qty < 1) return { row, p: null };
+    const before = running.get(p.id) ?? p.stock;
+    const qty = row.mode === 'descontar' ? Math.min(row.qty, before) : row.qty;
+    const after = before + (row.mode === 'descontar' ? -qty : qty);
+    running.set(p.id, after);
+    return { row, p, before, after, qty };
+  });
+}
+
+function openVoiceReview(text, items) {
+  const rows = items.map((it) => ({ ...it, auto: it.productId }));
+  const options = (row) => {
+    const cands = row.candidates.map(productById).filter(Boolean);
+    const others = state.products.filter((p) => !row.candidates.includes(p.id)).sort(byName);
+    const opt = (p) => `<option value="${p.id}"${p.id === row.productId ? ' selected' : ''}>${esc(productLabel(p))}</option>`;
+    return `
+      <option value=""${row.productId ? '' : ' selected'}>${cands.length ? '¿Cuál de estos?' : 'Elegir producto…'}</option>
+      ${cands.length ? `<optgroup label="Parecidos">${cands.map(opt).join('')}</optgroup>` : ''}
+      ${others.length ? `<optgroup label="${cands.length ? 'Otros productos' : 'Todos los productos'}">${others.map(opt).join('')}</optgroup>` : ''}
+      <option value="skip">Ignorar</option>`;
+  };
+  const modeBtn = (row, mode, label) =>
+    `<button type="button" data-voice-mode="${mode}" aria-selected="${row.mode === mode}">${label}</button>`;
+
+  const sheet = openSheet(`
+    <h2>Revisa antes de confirmar</h2>
+    <p class="voice-said">“${esc(text)}”</p>
+    <ul class="voice-list">
+      ${rows.map((row, i) => `
+        <li class="voice-row" data-i="${i}">
+          <p class="voice-heard">Escuché: “${esc(row.heard)}”</p>
+          <select class="voice-select" aria-label="Producto">${options(row)}</select>
+          <div class="voice-controls">
+            <div class="segmented" role="group" aria-label="Acción">${modeBtn(row, 'descontar', 'Descontar')}${modeBtn(row, 'reponer', 'Reponer')}</div>
+            ${stepperHTML(`qty${i}`, row.qty, { min: 1, label: 'Cantidad' })}
+          </div>
+          <p class="voice-note"></p>
+        </li>`).join('')}
+    </ul>
+    <button type="button" class="primary block" data-voice="confirm">Confirmar</button>
+    <button type="button" class="link" data-voice="again">Volver a dictar</button>`, { wide: true });
+
+  const refresh = () => {
+    let ready = 0;
+    let invalid = false;
+    voicePlan(rows).forEach(({ row, p, before, after, qty }, i) => {
+      const el = $(`.voice-row[data-i="${i}"]`, sheet);
+      const note = $('.voice-note', el);
+      let warn = false;
+      if (row.productId === 'skip') {
+        note.textContent = 'No se aplicará.';
+      } else if (!row.productId) {
+        warn = true;
+        note.textContent = row.candidates.length
+          ? 'Hay varios productos parecidos. Elige cuál.'
+          : 'No lo encontré en tu inventario. Elige el producto o ignóralo.';
+      } else if (!p) {
+        warn = invalid = true;
+        note.textContent = 'Ingresa una cantidad válida.';
+      } else if (row.mode === 'descontar' && before === 0) {
+        warn = true;
+        note.textContent = `No queda stock de ${p.name}; se omitirá.`;
+      } else {
+        ready++;
+        warn = row.mode === 'descontar' && qty < row.qty;
+        note.innerHTML = `${warn ? `Solo hay ${before}; se descontará${qty === 1 ? '' : 'n'} ${qty}. ` : ''}Stock ${before} → <strong>${after}</strong>${after <= p.reorder ? ' · <span class="tag low">en Mi lista</span>' : ''}`;
+      }
+      el.classList.toggle('warn', warn);
+      el.classList.toggle('skip', row.productId === 'skip');
+    });
+    const btn = $('[data-voice=confirm]', sheet);
+    btn.disabled = invalid || ready === 0;
+    btn.textContent = ready > 1 ? `Confirmar ${ready} cambios` : 'Confirmar';
+  };
+
+  sheet.addEventListener('change', (e) => {
+    if (!e.target.matches('.voice-select')) return;
+    rows[e.target.closest('.voice-row').dataset.i].productId = e.target.value || null;
+    refresh();
+  });
+  wireSteppers(sheet, (input) => {
+    rows[input.closest('.voice-row').dataset.i].qty = toInt(input.value);
+    refresh();
+  });
+  sheet.addEventListener('click', async (e) => {
+    const modeEl = e.target.closest('[data-voice-mode]');
+    if (modeEl) {
+      rows[modeEl.closest('.voice-row').dataset.i].mode = modeEl.dataset.voiceMode;
+      for (const b of $$('[data-voice-mode]', modeEl.parentElement)) b.setAttribute('aria-selected', b === modeEl);
+      refresh();
+      return;
+    }
+    const action = e.target.closest('[data-voice]')?.dataset.voice;
+    if (action === 'again') openVoiceSheet(text);
+    if (action === 'confirm') await applyVoice(rows);
+  });
+  refresh();
+}
+
+async function applyVoice(rows) {
+  const plan = voicePlan(rows).filter((x) => x.p && x.qty > 0);
+  const aliases = loadVoiceAliases();
+  for (const { row } of plan) {
+    if (!row.sure || row.productId !== row.auto) aliases[row.key] = row.productId;
+  }
+  saveVoiceAliases(aliases);
+
+  const totals = (mode) => {
+    const sums = new Map();
+    for (const { row, p, qty } of plan) if (row.mode === mode) sums.set(p.id, (sums.get(p.id) ?? 0) + qty);
+    return [...sums].map(([id, qty]) => ({ id, delta: mode === 'descontar' ? -qty : qty }));
+  };
+  const wasListed = new Map(state.products.map((p) => [p.id, needsRestock(p)]));
+  closeSheet();
+  // Primero lo comprado y después lo usado: así los topes calculados en la revisión siguen valiendo.
+  const added = await changeStock(totals('reponer'), 'reposicion');
+  const used = await changeStock(totals('descontar'), 'consumo');
+  const movs = [...added, ...used];
+  render();
+  if (!movs.length) { toast('No hubo cambios.'); return; }
+
+  const describe = (list) => (list.length > 3
+    ? plural(list.length, 'producto', 'productos')
+    : list.map((m) => `${Math.abs(m.delta)} ${productById(m.productId)?.name ?? m.productName}`).join(', '));
+  const parts = [];
+  if (used.length) parts.push(`Descontado: ${describe(used)}`);
+  if (added.length) parts.push(`Repuesto: ${describe(added)}`);
+  const ids = [...new Set(movs.map((m) => m.productId))];
+  const joined = ids.filter((id) => !wasListed.get(id) && needsRestock(productById(id))).length;
+  const left = ids.filter((id) => wasListed.get(id) && !needsRestock(productById(id))).length;
+  if (joined) parts.push(`${plural(joined, 'agregado', 'agregados')} a Mi lista`);
+  if (left) parts.push(`${plural(left, 'quitado', 'quitados')} de Mi lista`);
+  toast(parts.join(' · '), () => undoMovements(movs));
 }
 
 // ---------- Mi lista ----------
@@ -1741,6 +1970,7 @@ function bindEvents() {
       case 'edit': openProductSheet(productById(id)); break;
       case 'add': openAddSheet(); break;
       case 'scan-stock': scanStock(); break;
+      case 'voice': openVoiceSheet(); break;
       case 'resume-draft': openSetupSheet(loadRecsDraft()?.items ?? []); break;
       case 'discard-draft':
         if (!confirm('¿Descartar los productos que no terminaste de configurar?')) return;

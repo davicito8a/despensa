@@ -1,7 +1,7 @@
 // Service worker: permite abrir la app sin conexión (por ejemplo, en el supermercado).
 // Estrategia: responde al instante desde la caché y actualiza en segundo plano.
 // Al publicar cambios, sube CACHE para forzar la descarga de todos los archivos.
-const CACHE = 'despensa-v6';
+const CACHE = 'despensa-v7';
 const ASSETS = [
   './',
   'index.html',
@@ -12,6 +12,7 @@ const ASSETS = [
   'js/logic.js',
   'js/recommendations.js',
   'js/scanner.js',
+  'js/voice.js',
   'js/openfoodfacts.js',
   'js/vendor/zxing.min.js',
   'js/firebase-config.js',
